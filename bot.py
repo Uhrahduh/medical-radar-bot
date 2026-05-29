@@ -4,9 +4,11 @@ from radar import scan_jobs
 from config import TOKEN
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🧠 Medical Radar Ruhr activo."
-    )
+    chat_id = update.effective_chat.id
+
+await update.message.reply_text(
+    f"🧠 Radar activo.\nCHAT ID: {chat_id}"
+)
 
 async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
