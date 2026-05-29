@@ -1,47 +1,87 @@
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
-from config import TOKEN
-from radar import scan_jobs
-import asyncio
+import requests
+from bs4 import BeautifulSoup
+import hashlib
 
-print("🧠 RADAR MÉDICO INICIADO")
+KEYWORDS = [
+    "assistenzarzt",
+    "assistenzärztin",
+    "arzt in weiterbildung",
+    "weiterbildung"
+]
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🧠 Radar activo en Ruhrgebiet")
+SPECIALTY_HINTS = [
+    "anästhesie",
+    "radiologie",
+    "chirurgie",
+    "kardiologie",
+    "geriatrie",
+    "innere"
+]
 
-async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    jobs = scan_jobs()
+HOSPITALS = [
+    ("UK Essen", "https://www.uk-essen.de/karriere/stellenangebote/"),
+    ("Klinikum Dortmund", "https://www.klinikumdo.de/karriere/"),
+    ("Helios Wuppertal", "https://www.helios-gesundheit.de/karriere/"),
+    ("Klinikum Bochum", "https://www.klinikum-bochum.de/karriere/"),
+    ("Klinikum Duisburg", "https://www.klinikum-duisburg.de/karriere/"),
+    ("Klinikum Düsseldorf", "https://www.klinikum-duesseldorf.de/karriere/"),
+]
 
-    if not jobs:
-        await update.message.reply_text("🔎 No se detectaron vacantes nuevas")
-        return
-
-    for job in jobs:
-        await update.message.reply_text(job)
-
-async def auto_scan(app):
-    while True:
-        jobs = scan_jobs()
-
-        for job in jobs:
-            try:
-                await app.bot.send_message(chat_id=app.chat_id, text=job)
-            except:
-                pass
-
-        await asyncio.sleep(300)  # 5 minutos
+seen = set()
 
 
-def main():
-    app = Application.builder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("scan", scan))
-
-    print("BOT RUNNING")
-
-    app.run_polling()
+def hash_job(text):
+    return hashlib.md5(text.encode()).hexdigest()
 
 
-if __name__ == "__main__":
-    main()
+def detect_specialty(text):
+    t = text.lower()
+    for s in SPECIALTY_HINTS:
+        if s in t:
+            return s
+    return "general"
+
+
+def scan_jobs():
+    results = []
+
+    for hospital, url in HOSPITALS:
+        try:
+            r = requests.get(url, timeout=10)
+            soup = BeautifulSoup(r.text, "html.parser")
+
+            links = soup.find_all("a")
+
+            for link in links:
+                text = link.get_text(strip=True)
+                href = link.get("href")
+
+                if not text or not href:
+                    continue
+
+                combined = f"{text} {href}".lower()
+
+                # filtro médico real
+                if not any(k in combined for k in KEYWORDS):
+                    continue
+
+                job_id = hash_job(combined)
+
+                if job_id in seen:
+                    continue
+
+                seen.add(job_id)
+
+                specialty = detect_specialty(combined)
+
+                results.append(
+                    f"🏥 {hospital}\n"
+                    f"🩺 {specialty}\n"
+                    f"📄 {text}\n"
+                    f"🔗 {href if href.startswith('http') else url}"
+                )
+
+        except:
+            continue
+
+    return results
