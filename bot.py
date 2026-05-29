@@ -1,80 +1,95 @@
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
-from radar import scan_jobs
-from config import TOKEN
+import requests
+from bs4 import BeautifulSoup
 
-from flask import Flask
-import threading
-from apscheduler.schedulers.background import BackgroundScheduler
+SPECIALTIES = [
+    "anästhesiologie",
+    "intensivmedizin",
+    "radiologie",
+    "chirurgie",
+    "kardiologie",
+    "geriatrie",
+    "innere medizin"
+]
 
-# ------------------------
-# FLASK (RENDER FIX)
-# ------------------------
-web_app = Flask(__name__)
+KEY_TITLES = [
+    "assistenzarzt",
+    "assistenzärztin",
+    "arzt in weiterbildung",
+    "weiterbildung"
+]
 
-@web_app.route("/")
-def home():
-    return "Medical Radar activo"
+HOSPITALS = [
+    ("UK Essen", "https://www.uk-essen.de/karriere/stellenangebote/"),
+    ("Klinikum Dortmund", "https://www.klinikumdo.de/karriere/"),
+    ("Helios Wuppertal", "https://www.helios-gesundheit.de/karriere/"),
+    ("Klinikum Bochum", "https://www.klinikum-bochum.de/karriere/"),
+    ("Klinikum Duisburg", "https://www.klinikum-duisburg.de/karriere/"),
+    ("Klinikum Düsseldorf", "https://www.klinikum-duesseldorf.de/karriere/"),
+    ("Klinikum Wuppertal", "https://www.klinikum-wuppertal.de/karriere/"),
+    ("Klinikum Krefeld", "https://www.krankenhaus-krefeld.de/karriere/"),
+]
 
-
-def run_web():
-    web_app.run(host="0.0.0.0", port=10000)
-
-
-# ------------------------
-# TELEGRAM BOT
-# ------------------------
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-
-    await update.message.reply_text(
-        f"🧠 Medical Radar activo.\nCHAT ID: {chat_id}"
-    )
-
-
-async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔍 Escaneando hospitales...")
-
-    jobs = scan_jobs()
-
-    if not jobs:
-        await update.message.reply_text("No se encontraron resultados.")
-        return
-
-    for job in jobs:
-        await update.message.reply_text(job)
+seen = set()
 
 
-# ------------------------
-# AUTOMATIC SCANNER
-# ------------------------
-def auto_scan(app_bot):
-    jobs = scan_jobs()
-
-    for job in jobs:
-        app_bot.bot.send_message(chat_id=app_bot.chat_id, text=job)
+def extract_job_blocks(text):
+    """
+    Intenta detectar estructura de oferta real:
+    separa bloques de texto grandes (no solo keywords)
+    """
+    return text.split("\n\n")
 
 
-# ------------------------
-# MAIN
-# ------------------------
-app = Application.builder().token(TOKEN).build()
+def is_valid_job(block):
+    block_lower = block.lower()
 
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("scan", scan))
+    has_title = any(t in block_lower for t in KEY_TITLES)
+    has_specialty = any(s in block_lower for s in SPECIALTIES)
 
-
-def start_scheduler(app_bot):
-    scheduler = BackgroundScheduler()
-    scheduler.add_job(lambda: auto_scan(app_bot), "interval", minutes=5)
-    scheduler.start()
+    return has_title and has_specialty
 
 
-if __name__ == "__main__":
-    print("Bot iniciando...")
+def detect_specialty(block):
+    block_lower = block.lower()
 
-    threading.Thread(target=run_web).start()
+    for s in SPECIALTIES:
+        if s in block_lower:
+            return s
 
-    start_scheduler(app)
+    return "sin especialidad"
 
-    app.run_polling()
+
+def scan_jobs():
+    results = []
+
+    for hospital, url in HOSPITALS:
+        try:
+            r = requests.get(url, timeout=10)
+            soup = BeautifulSoup(r.text, "html.parser")
+
+            text = soup.get_text("\n")
+
+            blocks = extract_job_blocks(text)
+
+            for block in blocks:
+                if is_valid_job(block):
+
+                    job_id = f"{hospital}-{block[:40]}"
+
+                    if job_id in seen:
+                        continue
+
+                    seen.add(job_id)
+
+                    specialty = detect_specialty(block)
+
+                    results.append(
+                        f"🏥 {hospital}\n"
+                        f"🩺 {specialty}\n"
+                        f"🔗 {url}"
+                    )
+
+        except:
+            continue
+
+    return results
